@@ -25,6 +25,7 @@ services:
       - WEBHOOK_TIMEOUT=10000
       - WEBHOOK_MAX_RETRIES=3
       - QUEUE_ENABLED=false
+      - API_MASTER_KEY=${API_MASTER_KEY:-}
     volumes:
       - ./data:/app/data
     restart: unless-stopped
