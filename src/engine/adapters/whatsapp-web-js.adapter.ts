@@ -103,27 +103,33 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // Docker container, producing a 502 in Nginx).  We catch it here
     // and translate it into a graceful disconnect instead of a crash.
     const uncaughtHandler = (err: Error) => {
-      if (
+      const isPuppeteerError = (
         err.message?.includes('detached Frame') ||
         err.message?.includes('Execution context was destroyed') ||
         err.message?.includes('Session closed') ||
         err.message?.includes('Target closed') ||
-        err.message?.includes('Protocol error')
-      ) {
+        err.message?.includes('Protocol error') ||
+        err.message?.includes('Cannot find context')
+      );
+
+      if (isPuppeteerError) {
         this.logger.error(
           'Puppeteer frame error caught (process NOT crashed)',
           err.message,
         );
-        // Trigger a graceful disconnect so the session can attempt reconnect
-        this.setStatus(EngineStatus.DISCONNECTED);
-        this.callbacks.onDisconnected?.('PUPPETEER_CRASH');
-        return; // swallow — do NOT re-throw
+        // Only trigger disconnect if we're still in a connected state
+        if (this.status !== EngineStatus.DISCONNECTED && this.status !== EngineStatus.FAILED) {
+          this.setStatus(EngineStatus.DISCONNECTED);
+          this.callbacks.onDisconnected?.('PUPPETEER_CRASH');
+        }
+        return; // swallow — do NOT crash
       }
-      // For any other uncaught error, let it propagate normally
-      throw err;
+      // For non-Puppeteer errors: log but do NOT throw.
+      // Throwing inside uncaughtException handler ALWAYS crashes Node.js.
+      console.error('[WhatsAppWebJsAdapter] Non-Puppeteer uncaught exception:', err);
     };
     process.on('uncaughtException', uncaughtHandler);
-    // Store reference so we can remove the listener on destroy
+    // Store reference so we can remove the listener later
     (this as any)._uncaughtHandler = uncaughtHandler;
 
     try {
@@ -343,11 +349,6 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   async destroy(): Promise<void> {
-    // Remove the uncaught exception handler to avoid leaks
-    if ((this as any)._uncaughtHandler) {
-      process.removeListener('uncaughtException', (this as any)._uncaughtHandler);
-      (this as any)._uncaughtHandler = null;
-    }
     if (this.client) {
       try {
         await this.client.destroy();
@@ -356,6 +357,16 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       }
       this.client = null;
       this.setStatus(EngineStatus.DISCONNECTED);
+    }
+    // Remove the uncaught exception handler AFTER destroy with a delay.
+    // Puppeteer can throw "detached Frame" errors asynchronously even after
+    // client.destroy() resolves, so we keep the handler alive for 10s.
+    const handler = (this as any)._uncaughtHandler;
+    if (handler) {
+      (this as any)._uncaughtHandler = null;
+      setTimeout(() => {
+        process.removeListener('uncaughtException', handler);
+      }, 10000);
     }
   }
 
