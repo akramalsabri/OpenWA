@@ -361,7 +361,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         void this.updateStatus(id, SessionStatus.DISCONNECTED);
 
         if (reason === 'LOGOUT' || reason === 'Authentication failed') {
-          this.deleteSessionDirectory(session.name);
+          const engine = this.engines.get(id);
+          if (engine) {
+            void engine.destroy().catch(() => {}).finally(() => {
+              this.engines.delete(id);
+              this.deleteSessionDirectory(session.name);
+            });
+          } else {
+            this.deleteSessionDirectory(session.name);
+          }
         } else {
           // Attempt to reconnect
           this.scheduleReconnect(id, session);
