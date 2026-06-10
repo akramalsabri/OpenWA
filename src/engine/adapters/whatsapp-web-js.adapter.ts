@@ -210,6 +210,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       this.setStatus(EngineStatus.FAILED);
       this.callbacks.onDisconnected?.('Authentication failed');
     });
+
+    this.client.on('error', error => {
+      this.logger.error('WhatsApp Web.js Client Error', String(error));
+    });
   }
 
   private setStatus(status: EngineStatus): void {
