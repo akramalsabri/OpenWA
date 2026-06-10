@@ -100,7 +100,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         },
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        authTimeoutMs: 120000,
+        authTimeoutMs: 320000,
         webVersionCache: {
           type: 'remote',
           remotePath: 'https://cdn.jsdelivr.net/gh/wppconnect-team/wa-version@main/html/{version}.html',
