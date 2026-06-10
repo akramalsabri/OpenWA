@@ -25,6 +25,9 @@ services:
       dockerfile: Dockerfile
     container_name: openwa-api
     restart: unless-stopped
+    # Chromium needs more than the default 64MB /dev/shm to run WhatsApp Web.
+    # Without this, Chrome crashes with "detached Frame" errors after loading.
+    shm_size: '512mb'
     ports:
       - '127.0.0.1:${API_PORT:-2785}:2785'
     expose:
