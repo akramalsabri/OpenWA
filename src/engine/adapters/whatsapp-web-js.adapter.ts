@@ -119,6 +119,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private setupEventHandlers(): void {
     if (!this.client) return;
 
+    this.client.on('loading_screen', (percent, message) => {
+      this.logger.log(`Loading screen: ${percent}% - ${message}`);
+    });
+
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.client.on('qr', async (qr: string) => {
       try {
@@ -131,6 +135,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
 
     this.client.on('authenticated', () => {
+      this.logger.log('Session authenticated successfully');
       this.setStatus(EngineStatus.AUTHENTICATING);
       this.qrCode = null;
     });
