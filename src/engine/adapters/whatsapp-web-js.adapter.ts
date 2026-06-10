@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
+import * as fs from 'fs';
 import {
   IWhatsAppEngine,
   EngineStatus,
@@ -64,9 +65,66 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   private readonly logger = createLogger('WhatsAppWebJsAdapter');
 
+  /**
+   * Detect the Chromium executable path.
+   * Priority: PUPPETEER_EXECUTABLE_PATH env > known Linux paths > undefined (bundled)
+   */
+  private detectChromiumPath(): string | undefined {
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+      return process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+    // Common Chromium paths on Debian/Ubuntu Docker images
+    const candidates = [
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/google-chrome-stable',
+    ];
+    for (const candidate of candidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          this.logger.log(`Detected Chromium at: ${candidate}`);
+          return candidate;
+        }
+      } catch {
+        // ignore filesystem errors
+      }
+    }
+    return undefined; // fall back to bundled Chromium
+  }
+
   async initialize(callbacks: EngineEventCallbacks): Promise<void> {
     this.callbacks = callbacks;
     this.setStatus(EngineStatus.INITIALIZING);
+
+    // ── Guard against Puppeteer "detached Frame" crashes ──
+    // whatsapp-web.js internally calls page.evaluate() on frames that
+    // WhatsApp Web may have navigated away from. The resulting error is
+    // an uncaught exception that kills the Node process (and thus the
+    // Docker container, producing a 502 in Nginx).  We catch it here
+    // and translate it into a graceful disconnect instead of a crash.
+    const uncaughtHandler = (err: Error) => {
+      if (
+        err.message?.includes('detached Frame') ||
+        err.message?.includes('Execution context was destroyed') ||
+        err.message?.includes('Session closed') ||
+        err.message?.includes('Target closed') ||
+        err.message?.includes('Protocol error')
+      ) {
+        this.logger.error(
+          'Puppeteer frame error caught (process NOT crashed)',
+          err.message,
+        );
+        // Trigger a graceful disconnect so the session can attempt reconnect
+        this.setStatus(EngineStatus.DISCONNECTED);
+        this.callbacks.onDisconnected?.('PUPPETEER_CRASH');
+        return; // swallow — do NOT re-throw
+      }
+      // For any other uncaught error, let it propagate normally
+      throw err;
+    };
+    process.on('uncaughtException', uncaughtHandler);
+    // Store reference so we can remove the listener on destroy
+    (this as any)._uncaughtHandler = uncaughtHandler;
 
     try {
       // Build puppeteer args, including proxy if configured
@@ -79,6 +137,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         '--no-zygote',
         '--disable-gpu',
         '--disable-blink-features=AutomationControlled',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-sync',
+        '--disable-translate',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--no-default-browser-check',
       ];
 
       // Add proxy configuration if provided
@@ -89,6 +155,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         );
       }
 
+      const executablePath = this.detectChromiumPath();
+      this.logger.log(`Chromium executable: ${executablePath || '(bundled)'}`);
+
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: this.config.sessionId,
@@ -97,11 +166,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         puppeteer: {
           headless: this.config.puppeteer?.headless ?? true,
           args: puppeteerArgs,
-          // Fallback to common Chromium binary paths on Linux if env var not set
-          executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser' || '/usr/bin/chromium' || undefined,
+          executablePath,
         },
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         authTimeoutMs: 320000,
+        qrMaxRetries: 5,
         webVersionCache: {
           type: 'remote',
           remotePath: 'https://cdn.jsdelivr.net/gh/wppconnect-team/wa-version@main/html/{version}.html',
@@ -112,6 +181,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       this.setupEventHandlers();
       await this.client.initialize();
     } catch (error) {
+      this.logger.error('Engine initialization failed', String(error));
       this.setStatus(EngineStatus.FAILED);
       throw error;
     }
@@ -210,17 +280,25 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
 
     this.client.on('disconnected', reason => {
+      this.logger.warn(`Client disconnected event: ${reason}`);
       this.setStatus(EngineStatus.DISCONNECTED);
       this.callbacks.onDisconnected?.(reason);
     });
 
-    this.client.on('auth_failure', () => {
+    this.client.on('auth_failure', (msg) => {
+      this.logger.error(`Authentication failure: ${msg}`);
       this.setStatus(EngineStatus.FAILED);
       this.callbacks.onDisconnected?.('Authentication failed');
     });
 
+    // Catch change_info event for session state sync
+    this.client.on('change_state', (state) => {
+      this.logger.log(`WhatsApp connection state changed: ${state}`);
+    });
+
     this.client.on('error', error => {
-      this.logger.error('WhatsApp Web.js Client Error', String(error));
+      this.logger.error('WhatsApp Web.js Client Error (caught)', String(error));
+      // Do NOT crash — just log
     });
   }
 
@@ -265,8 +343,17 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   async destroy(): Promise<void> {
+    // Remove the uncaught exception handler to avoid leaks
+    if ((this as any)._uncaughtHandler) {
+      process.removeListener('uncaughtException', (this as any)._uncaughtHandler);
+      (this as any)._uncaughtHandler = null;
+    }
     if (this.client) {
-      await this.client.destroy();
+      try {
+        await this.client.destroy();
+      } catch (error) {
+        this.logger.warn('Error during client destroy (ignoring)', String(error));
+      }
       this.client = null;
       this.setStatus(EngineStatus.DISCONNECTED);
     }

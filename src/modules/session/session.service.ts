@@ -361,6 +361,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         void this.updateStatus(id, SessionStatus.DISCONNECTED);
 
         if (reason === 'LOGOUT' || reason === 'Authentication failed') {
+          // Terminal disconnect — session data is invalidated by WhatsApp
           const engine = this.engines.get(id);
           if (engine) {
             void engine.destroy().catch(() => {}).finally(() => {
@@ -371,8 +372,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
             this.deleteSessionDirectory(session.name);
           }
         } else {
-          // Attempt to reconnect
-          this.scheduleReconnect(id, session);
+          // Recoverable disconnect (includes PUPPETEER_CRASH, network issues, etc.)
+          // Clean up the crashed engine first, then reconnect
+          const engine = this.engines.get(id);
+          if (engine) {
+            void engine.destroy().catch(() => {}).finally(() => {
+              this.engines.delete(id);
+              this.scheduleReconnect(id, session);
+            });
+          } else {
+            this.engines.delete(id);
+            this.scheduleReconnect(id, session);
+          }
         }
       },
       onStateChanged: (engineState: EngineStatus): void => {
