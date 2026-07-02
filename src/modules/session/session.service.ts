@@ -280,6 +280,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
           pushName,
           connectedAt: new Date(),
           lastActiveAt: new Date(),
+        }).then(() => {
+          this.eventsGateway.emitSessionStatus(id, SessionStatus.READY, { phone, pushName });
         });
       },
       onMessage: (message): void => {

@@ -63,6 +63,13 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     socketRef.current.on('connect', () => {
       console.log('[WebSocket] Connected');
       setIsConnected(true);
+      
+      // Subscribe to all sessions and events
+      socketRef.current?.emit('message', {
+        type: 'subscribe',
+        sessionId: '*',
+        events: ['*'],
+      });
     });
 
     socketRef.current.on('disconnect', () => {
@@ -92,22 +99,36 @@ export function useWebSocket(events: WebSocketEvents = {}) {
 
     const socket = socketRef.current;
 
-    if (events.onSessionStatus) {
-      socket.on('session:status', events.onSessionStatus);
-    }
+    const handleMessage = (message: any) => {
+      if (message && message.type === 'event' && message.payload) {
+        const { event, sessionId, data } = message.payload;
+        
+        if (event === 'session.status' && events.onSessionStatus) {
+          events.onSessionStatus({
+            sessionId,
+            status: data.status,
+            timestamp: message.timestamp || new Date().toISOString(),
+          });
+        } else if (event === 'session.qr' && events.onQRCode) {
+          events.onQRCode({
+            sessionId,
+            qrCode: data.qrCode,
+            timestamp: message.timestamp || new Date().toISOString(),
+          });
+        } else if (event === 'message.received' && events.onMessage) {
+          events.onMessage({
+            sessionId,
+            message: data,
+            timestamp: message.timestamp || new Date().toISOString(),
+          });
+        }
+      }
+    };
 
-    if (events.onQRCode) {
-      socket.on('session:qr', events.onQRCode);
-    }
-
-    if (events.onMessage) {
-      socket.on('session:message', events.onMessage);
-    }
+    socket.on('message', handleMessage);
 
     return () => {
-      socket.off('session:status');
-      socket.off('session:qr');
-      socket.off('session:message');
+      socket.off('message', handleMessage);
     };
   }, [events.onSessionStatus, events.onQRCode, events.onMessage]);
 
