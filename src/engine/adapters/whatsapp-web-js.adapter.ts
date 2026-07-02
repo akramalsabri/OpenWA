@@ -169,11 +169,6 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           clientId: this.config.sessionId,
           dataPath: path.resolve(this.config.sessionDataPath),
         }),
-        webVersionCache: {
-          type: 'remote',
-          remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
-          strict: false,
-        },
         puppeteer: {
           headless: this.config.puppeteer?.headless ?? true,
           args: puppeteerArgs,
