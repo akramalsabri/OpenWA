@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, DataSource } from 'typeorm';
+import * as fs from 'fs';
+import * as path from 'path';
 import { Session, SessionStatus } from './entities/session.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
@@ -33,6 +35,30 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
 
   // Reconnection state per session
   private reconnectStates: Map<string, ReconnectState> = new Map();
+
+  private getSessionDirectory(sessionName: string): string {
+    const sessionDataPath = process.env.SESSION_DATA_PATH || './data/sessions';
+    return path.resolve(sessionDataPath, `session-${sessionName}`);
+  }
+
+  private deleteSessionDirectory(sessionName: string): void {
+    const dir = this.getSessionDirectory(sessionName);
+    try {
+      if (fs.existsSync(dir)) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        this.logger.log(`Deleted session directory from disk: ${dir}`, {
+          sessionName,
+          action: 'delete_directory',
+        });
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to delete session directory: ${dir}`,
+        error instanceof Error ? error.message : String(error),
+        { sessionName, action: 'delete_directory_failed' },
+      );
+    }
+  }
 
   constructor(
     @InjectRepository(Session, 'data')
@@ -159,6 +185,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       await engine.destroy();
       this.engines.delete(id);
     }
+
+    // Clean up session directory from disk
+    this.deleteSessionDirectory(session.name);
 
     // Execute hook BEFORE delete so plugins can access session data
     await this.hookManager.execute(
@@ -333,8 +362,31 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
 
         void this.updateStatus(id, SessionStatus.DISCONNECTED);
 
-        // Attempt to reconnect
-        this.scheduleReconnect(id, session);
+        if (reason === 'LOGOUT' || reason === 'Authentication failed') {
+          // Terminal disconnect — session data is invalidated by WhatsApp
+          const engine = this.engines.get(id);
+          if (engine) {
+            void engine.destroy().catch(() => {}).finally(() => {
+              this.engines.delete(id);
+              this.deleteSessionDirectory(session.name);
+            });
+          } else {
+            this.deleteSessionDirectory(session.name);
+          }
+        } else {
+          // Recoverable disconnect (includes PUPPETEER_CRASH, network issues, etc.)
+          // Clean up the crashed engine first, then reconnect
+          const engine = this.engines.get(id);
+          if (engine) {
+            void engine.destroy().catch(() => {}).finally(() => {
+              this.engines.delete(id);
+              this.scheduleReconnect(id, session);
+            });
+          } else {
+            this.engines.delete(id);
+            this.scheduleReconnect(id, session);
+          }
+        }
       },
       onStateChanged: (engineState: EngineStatus): void => {
         const statusMap: Record<EngineStatus, SessionStatus> = {

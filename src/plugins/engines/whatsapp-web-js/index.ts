@@ -35,12 +35,34 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
 
   createEngine(config: Record<string, unknown>): IWhatsAppEngine {
     const sessionId = config.sessionId as string;
-    const sessionDataPath = (this.context?.config.sessionDataPath as string) ?? './data/sessions';
-    const headless = (this.context?.config.headless as boolean) ?? true;
-    const puppeteerArgs = (this.context?.config.puppeteerArgs as string[]) ?? [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-    ];
+    
+    // Ensure we respect env variables if not set in the plugin config dashboard
+    const sessionDataPath =
+      (this.context?.config.sessionDataPath as string) ??
+      process.env.SESSION_DATA_PATH ??
+      './data/sessions';
+      
+    const headless =
+      (this.context?.config.headless as boolean) ??
+      (process.env.PUPPETEER_HEADLESS !== 'false');
+
+    const envArgs = process.env.PUPPETEER_ARGS 
+      ? process.env.PUPPETEER_ARGS.split(',') 
+      : null;
+
+    const puppeteerArgs =
+      (this.context?.config.puppeteerArgs as string[]) ??
+      envArgs ??
+      [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-blink-features=AutomationControlled',
+      ];
 
     const proxyUrl = config.proxyUrl as string | undefined;
     const proxyType = config.proxyType as 'http' | 'https' | 'socks4' | 'socks5' | undefined;
