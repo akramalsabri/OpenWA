@@ -10,7 +10,7 @@ services:
     container_name: openwa-api
     ports:
       - '127.0.0.1:2785:2785'
-    shm_size: '2gb'
+    shm_size: '3gb'
     environment:
       - NODE_ENV=development
       - PORT=2785
@@ -33,7 +33,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 3G
           cpus: '1.5'
         reservations:
           memory: 512M
