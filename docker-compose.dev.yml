@@ -10,7 +10,7 @@ services:
     container_name: openwa-api
     ports:
       - '127.0.0.1:2785:2785'
-    shm_size: '3gb'
+    ء
     environment:
       - NODE_ENV=development
       - PORT=2785
