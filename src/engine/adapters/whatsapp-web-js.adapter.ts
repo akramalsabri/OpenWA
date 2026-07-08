@@ -173,6 +173,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           headless: this.config.puppeteer?.headless ?? true,
           args: puppeteerArgs,
           executablePath,
+          // Slow/low-memory servers can need more than puppeteer's default
+          // 30s to start Chromium and print the WS endpoint URL.
+          timeout: 120000,
+          // Set PUPPETEER_DUMPIO=true to pipe Chromium's stdout/stderr into
+          // the app logs — shows the real reason when Chromium fails to
+          // launch (missing libs, OOM kill, sandbox errors, ...).
+          dumpio: process.env.PUPPETEER_DUMPIO === 'true',
         },
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         authTimeoutMs: 320000,
