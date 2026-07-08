@@ -51,8 +51,9 @@ RUN apt-get update && apt-get install -y \
     dumb-init \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Chrome executable path for Puppeteer
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+# Skip puppeteer's browser download during npm ci; we install the matching
+# Chrome for Testing explicitly below (modern var name is PUPPETEER_SKIP_DOWNLOAD)
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 # Create app user for security
@@ -65,6 +66,17 @@ COPY package*.json ./
 
 # Install production dependencies only
 RUN npm ci --omit=dev && npm cache clean --force
+
+# Install the Chrome for Testing build that matches the installed puppeteer
+# version. Debian's chromium package tracks the latest Chromium (often far
+# ahead of what puppeteer supports) and breaks WhatsApp Web ready detection.
+ENV PUPPETEER_CACHE_DIR=/app/.chrome
+RUN npx puppeteer browsers install chrome \
+    && ln -sf "$(find /app/.chrome -type f -name chrome -path '*chrome-linux64/*' | head -1)" /usr/local/bin/chrome-for-testing \
+    && /usr/local/bin/chrome-for-testing --version
+
+# Point the app at the matched Chrome instead of Debian's chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chrome-for-testing
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
